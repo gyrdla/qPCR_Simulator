@@ -1,8 +1,14 @@
-# qPCR Simulator
-Gerçekçi, MIQE uyumlu, termodinamik ve kinetik temelli qPCR simülasyon aracı.  
+﻿# qPCR Simulator
+
+Gerçekçi, MIQE uyumlu, termodinamik ve kinetik temelli qPCR simülasyon aracı.
 Öğrenciler, araştırmacılar ve teknik optimizasyon için tasarlanmıştır.
 
-##  Özellikler
+## İndir
+
+[qPCR_Simulator.exe — Windows](https://github.com/gyrdla/qPCR_Simulator/releases/tag/v1.0)
+
+## Özellikler
+
 - SantaLucia 1998 + Owczarzy 2008 Mg²⁺/dNTP düzeltmeli Tm/ΔG hesabı
 - Hot-start lag, amplifiable fraction, substrat/ürün inhibisyonlu kinetik model
 - SYBR/TaqMan optik profili, heteroscedastic PMT gürültüsü
@@ -13,16 +19,17 @@ Gerçekçi, MIQE uyumlu, termodinamik ve kinetik temelli qPCR simülasyon aracı
 - Teknik/Biyolojik tekrar simülasyonu (Poisson, pipet CV%, blok uniformitesi)
 - PNG/CSV export, thread-safe GUI
 
-##  Kurulum
+## Kurulum (kaynak koddan)
+
 ```bash
-git clone <repo-url>
+git clone https://github.com/gyrdla/qPCR_Simulator
 cd qPCR_Simulator
 python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # macOS/Linux
+.venv\Scripts\activate
 pip install -r requirements.txt
 python main.py
+```
 
+## Lisans
 
-Lisans & Atıf
 Eğitim ve araştırma amaçlı açık kaynak. Yayınlarında kullanırsan lütfen repo linkini belirt.
