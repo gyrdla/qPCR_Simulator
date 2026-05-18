@@ -16,7 +16,6 @@ class TestThermodynamics:
     def test_delta_g_stability(self):
         seq = "AGCTGACCTGATCTTCAAGG"
         dg = calculate_delta_g(seq, temp_c=37.0)
-        # 20-mer için literatür ΔG aralığı: -30 ~ -10 kcal/mol
         assert -30.0 < dg < -10.0
 
 class TestKinetics:
@@ -50,4 +49,3 @@ class TestSignal:
         amp = [1000 * (1.9**i) for i in range(25)] + [1000 * (1.9**24)] * 15
         sig = generate_signal(amp, dye='SYBR')
         assert 200 < min(sig) < max(sig) < 15000
-    
