@@ -92,13 +92,14 @@ class ResultsPanel(QWidget):
         
         mux_cfg = self.last_params.get('multiplex', {})
         is_mux = mux_cfg.get('enabled', False)
-        
         COLOR_MAP = {'FAM': '#10b981', 'HEX': '#f59e0b', 'Cy5': '#ef4444', 'TARGET': '#3b82f6', 'REFERENCE': '#8b5cf6', 'NTC': '#64748b'}
         
         if not result.get('plate_cts'):
             is_rep = result.get('is_replicate', False)
-            self.ct_table.setColumnCount(6)
-            self.ct_table.setHorizontalHeaderLabels(["Hedef", "Ct", "Verimlilik", "Tm Fwd", "Tm Rev", "MIQE Durum"])
+            self.ct_table.setColumnCount(7)
+            self.ct_table.setHorizontalHeaderLabels(["Hedef", "Ct", "Verimlilik", "Tm Fwd", "Tm Rev", "MIQE Durum", "📐 Eğri Kalitesi"])
+            cq = result.get('curve_quality', {})
+            cq_txt = f"{cq.get('qc_score',0)}/100 ({cq.get('status','')})" if cq else "-"
             if is_rep:
                 rep = result['replicates']
                 miqe_txt = f"✅ MIQE PASS | Mean Ct: {rep['mean_ct']:.2f} ± {rep['sd_ct']:.2f} | CV: {rep['cv_pct']}% | n={rep['n_total']}"
@@ -111,6 +112,7 @@ class ResultsPanel(QWidget):
                 self.ct_table.setItem(0, 3, QTableWidgetItem(f"{result.get('tm_fwd',0):.2f} °C"))
                 self.ct_table.setItem(0, 4, QTableWidgetItem(f"{result.get('tm_rev',0):.2f} °C"))
                 self.ct_table.setItem(0, 5, QTableWidgetItem("PASS" if rep['miqe_pass'] else "FAIL"))
+                self.ct_table.setItem(0, 6, QTableWidgetItem(cq_txt))
             else:
                 self.progress_label.setText("✅ Simülasyon tamamlandı")
                 self.ct_table.setRowCount(1)
@@ -120,6 +122,7 @@ class ResultsPanel(QWidget):
                 self.ct_table.setItem(0, 3, QTableWidgetItem(f"{result.get('tm_fwd',0):.2f} °C"))
                 self.ct_table.setItem(0, 4, QTableWidgetItem(f"{result.get('tm_rev',0):.2f} °C"))
                 self.ct_table.setItem(0, 5, QTableWidgetItem("-"))
+                self.ct_table.setItem(0, 6, QTableWidgetItem(cq_txt))
             return
 
         wells = self.last_params.get('plate_wells', [])
@@ -128,14 +131,13 @@ class ResultsPanel(QWidget):
         plate_signals = result.get('plate_signals', [])
         cycles = result['cycles']
         
-        headers = ["Kuyu", "Tip", "Kopya", "Ct", "Verimlilik", "Hacim"]
-        if is_mux: headers.append("Kanal")
+        headers = ["Kuyu", "Tip", "Kopya", "Ct", "Verimlilik", "Hacim", "📐 Eğri Kalitesi"]
         self.ct_table.setColumnCount(len(headers))
         self.ct_table.setHorizontalHeaderLabels(headers)
         self.ct_table.setRowCount(len(wells))
         
         self.ax.clear()
-        self.ax.set_title("Plaka Amplifikasyon Eğrileri")
+        self.ax.set_title("Plaka Amplifikasyon Eğrileri (Baseline Düzeltmeli)")
         self.ax.set_xlabel("Döngü")
         self.ax.set_ylabel("Florasan (RFU)")
         self.ax.grid(True, alpha=0.3)
@@ -157,17 +159,16 @@ class ResultsPanel(QWidget):
             
             self.ax.plot(cycles, sig, color=color, linestyle='-', label=label, alpha=0.85, linewidth=1.2)
             
+            cq = result.get('curve_quality', {})
+            cq_txt = f"{cq.get('qc_score',0)}/100 ({cq.get('status','')})" if cq else "-"
+            
             self.ct_table.setItem(i, 0, QTableWidgetItem(well_name))
             self.ct_table.setItem(i, 1, QTableWidgetItem(well_type))
             self.ct_table.setItem(i, 2, QTableWidgetItem(str(w.get('copies', 0))))
             self.ct_table.setItem(i, 3, QTableWidgetItem(f"{cts[i]:.2f}" if i < len(cts) else "-"))
             self.ct_table.setItem(i, 4, QTableWidgetItem(f"{effs[i]*100:.1f}%" if i < len(effs) else "-"))
             self.ct_table.setItem(i, 5, QTableWidgetItem(f"{w.get('vol_ul', 20.0)} µL"))
-            
-            if is_mux:
-                ch_map = {0: mux_cfg.get('ch1_dye','FAM'), 1: mux_cfg.get('ch2_dye','HEX'), 2: mux_cfg.get('ch3_dye','Cy5')}
-                assigned_ch = ch_map.get(i % 3, '-')
-                self.ct_table.setItem(i, 6, QTableWidgetItem(assigned_ch))
+            self.ct_table.setItem(i, 6, QTableWidgetItem(cq_txt))
         
         self.ax.legend(fontsize=9, loc='upper left', frameon=True)
         self.canvas.draw()
@@ -183,6 +184,7 @@ class ResultsPanel(QWidget):
             self.ct_table.setItem(r, 3, QTableWidgetItem(f"geNorm M: {norm.get('genorm_m', 0.0):.3f}"))
             self.ct_table.setItem(r, 4, QTableWidgetItem("✅ Stabil" if norm.get('ref_stable', True) else "⚠️ Kararsız"))
             self.ct_table.setItem(r, 5, QTableWidgetItem("MIQE Norm: PASS" if norm.get('ref_stable', True) and norm['fc'] > 0 else "FAIL"))
+            self.ct_table.setItem(r, 6, QTableWidgetItem("-"))
             r += 1
             
         if diag:
@@ -194,6 +196,7 @@ class ResultsPanel(QWidget):
             self.ct_table.setItem(r, 3, QTableWidgetItem(f"LoD: {diag['lod']['lod_copies']:.1f}"))
             self.ct_table.setItem(r, 4, QTableWidgetItem("✅ IVD Uyumlu" if diag['ivd_ready'] else "⚠️ Opt. Gerekli"))
             self.ct_table.setItem(r, 5, QTableWidgetItem(f"Kesim: ≤{diag['pos_cutoff']}"))
+            self.ct_table.setItem(r, 6, QTableWidgetItem("-"))
             self._miqe_export_val = f"Diag: Sens{m['sensitivity']:.2f} Spec{m['specificity']:.2f} LoD{diag['lod']['lod_copies']:.1f}"
                 
         self.progress_label.setText(f"✅ Plate simülasyonu tamamlandı ({len(wells)} kuyu)")

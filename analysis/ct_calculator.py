@@ -1,89 +1,81 @@
 # analysis/ct_calculator.py
 import numpy as np
-from typing import List, Dict
-from scipy.optimize import curve_fit, OptimizeWarning
-from scipy.signal import savgol_filter
 import warnings
+from typing import Dict, List
+from scipy.signal import savgol_filter
+from analysis.curve_quality import adaptive_baseline_correction, calculate_curve_metrics
 
-def sigmoid_4pl(x, a, b, c, d):
-    return a / (1 + np.exp(-b * (x - c))) + d
+# Numpy runtime uyarılarını (divide, invalid value) geçici olarak bastır
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
-def calculate_ct(fluorescence: List[float], method: str = 'hybrid') -> Dict:
-    """
-    Hibrit Ct algoritması: Cy0 + 2nd Derivative Max + Threshold fallback
-    MIQE uyumlu güvenilirlik skoru (0-1) döner.
-    """
-    y = np.array(fluorescence, dtype=float)
-    x = np.arange(len(y))
-    if len(y) < 10:
-        return {'ct': float(len(y)), 'confidence': 0.0, 'method': 'fallback', 'r2_fit': 0.0}
+def calculate_ct(signal: List[float], method: str = 'hybrid') -> Dict:
+    raw = np.array(signal, dtype=float)
+    n = len(raw)
+    if n < 20:
+        return {'ct': float('nan'), 'confidence': 0.0, 'r2_fit': 0.0, 'curve_quality': {}}
 
-    bl_region = y[2:8]
-    bl_mean, bl_std = np.mean(bl_region), np.std(bl_region)
-    y_corr = y - bl_mean
-    y_max = np.max(y_corr)
-    threshold = max(10 * bl_std, 0.12 * y_max, 600.0)
+    # 1. Adaptif Baseline Düzeltmesi
+    corrected = adaptive_baseline_correction(raw)
+    
+    # Threshold stabilitesi için baseline ofsetini geri ekle
+    baseline_mean = np.mean(raw[:15])
+    corrected += baseline_mean
 
-    results = {}
+    # 2. Threshold Yöntemi
+    bl_mean = np.mean(corrected[:15])
+    bl_sd = np.std(corrected[:15])
+    threshold = bl_mean + 10 * bl_sd
+    above_thresh = np.where(corrected > threshold)[0]
+    ct_thresh = float(above_thresh[0]) + 0.5 if len(above_thresh) > 0 else 40.0
 
-    # 1. Threshold
-    crosses = np.where(y_corr > threshold)[0]
-    if len(crosses) > 0:
-        idx = crosses[0]
-        if idx > 0:
-            y1, y2 = y_corr[idx-1], y_corr[idx]
-            results['threshold'] = idx - 1 + (threshold - y1) / (y2 - y1)
+    # 3. 2nd Türev Maks (Cy0 Yaklaşımı)
+    if n >= 5:
+        smoothed = savgol_filter(corrected, window_length=5, polyorder=2)
+        d2 = np.gradient(np.gradient(smoothed))
+        cy0_idx = np.argmax(d2)
+        ct_cy0 = float(cy0_idx) + 0.5
+    else:
+        ct_cy0 = ct_thresh
 
-    # 2. Cy0
+    # 4. Hibrit Seçim
+    if method == 'hybrid':
+        if abs(ct_thresh - ct_cy0) < 2.0:
+            ct_val = (ct_thresh + ct_cy0) / 2.0
+            confidence = 0.95
+        else:
+            ct_val = ct_thresh
+            confidence = 0.75
+    else:
+        ct_val = ct_thresh if method == 'threshold' else ct_cy0
+        confidence = 0.85
+
+    # 5. R² Fit (Log-lineer faz)
+    p70 = np.percentile(corrected, 70)
+    mask_exp = (corrected > threshold) & (corrected < p70)
+    
     r2 = 0.0
-    try:
-        p0 = [y_max, 1.0, len(x)/2, np.min(y_corr)]
-        bounds = ([0, 0.1, 5, -np.inf], [np.inf, 5.0, 35, np.inf])
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", OptimizeWarning)
-            popt, _ = curve_fit(sigmoid_4pl, x, y_corr, p0=p0, bounds=bounds, maxfev=20000)
-        results['cy0'] = popt[2] - 1.0 / popt[1]
-        ss_res = np.sum((y_corr - sigmoid_4pl(x, *popt))**2)
-        ss_tot = np.sum((y_corr - np.mean(y_corr))**2)
-        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
-    except Exception:
-        pass
+    if np.sum(mask_exp) >= 3:
+        # Baseline'i çıkararak saf büyüme fazının log-lineerliğini fit et
+        y_vals = corrected[mask_exp] - bl_mean
+        y = np.log10(np.maximum(y_vals, 1e-6)) # Negatif log uyarısını önle
+        x = np.arange(n)[mask_exp]
+        try:
+            p = np.polyfit(x, y, 1)
+            y_fit = np.polyval(p, x)
+            ss_res = np.sum((y - y_fit)**2)
+            ss_tot = np.sum((y - np.mean(y))**2)
+            r2 = float(1 - ss_res/ss_tot) if ss_tot > 1e-6 else 0.99
+        except (ValueError, np.linalg.LinAlgError):
+            r2 = 0.0 # DLASCLS hatası olursa 0 döndür
 
-    # 3. 2nd Derivative Max
-    try:
-        y_smooth = savgol_filter(y_corr, window_length=7, polyorder=3)
-        d2 = np.gradient(np.gradient(y_smooth))
-        d2_max_idx = np.argmax(d2[5:-5]) + 5
-        results['deriv2'] = float(d2_max_idx)
-    except Exception:
-        pass
-
-    # Hibrit karar
-    ct_val = results.get('cy0', results.get('threshold', results.get('deriv2', float(len(x)))))
-    used_method = 'cy0' if 'cy0' in results else ('threshold' if 'threshold' in results else 'deriv2')
-
-    # MIQE Güvenilirlik Skoru
-    confidence = 0.0
-    if r2 > 0.98: confidence += 0.4
-    try:
-        mask = (y_corr > 0.05 * y_max) & (y_corr < 0.30 * y_max)
-        if np.sum(mask) >= 4:
-            slope, _ = np.polyfit(x[mask], np.log10(y_corr[mask]), 1)
-            eff = 10**(-1/slope) - 1
-            if 0.85 <= eff <= 1.05: confidence += 0.3
-    except Exception: pass
-    if bl_std < 0.05 * y_max: confidence += 0.3
-    confidence = min(1.0, confidence)
-
-    if ct_val < 5.0 or ct_val > 38.0:
-        ct_val = results.get('threshold', ct_val)
-        used_method = 'threshold_fallback'
-        confidence *= 0.5
+    # 6. Eğri Kalite Metrikleri
+    curve_quality = calculate_curve_metrics(corrected)
 
     return {
-        'ct': max(5.0, min(ct_val, float(len(x)))),
-        'confidence': round(confidence, 2),
-        'method': used_method,
-        'r2_fit': round(r2, 3),
-        'details': results
+        'ct': float(np.clip(ct_val, 0, n)),
+        'confidence': confidence,
+        'r2_fit': round(r2, 4),
+        'curve_quality': curve_quality,
+        'baseline_corrected': True
     }

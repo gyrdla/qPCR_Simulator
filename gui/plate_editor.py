@@ -77,7 +77,8 @@ class PlateEditorPanel(QWidget):
     def _build_grid(self, fmt: str):
         rows, cols = (1, 8) if fmt == "8-Strip" else (1, 12) if fmt == "12-Strip" else (8, 12)
         self.table.setRowCount(rows)
-        self.table.setColumnCount(cols)
+        self.table.setColumnCount(6)  # ✅ Edge? sütunu için 6 sütun
+        self.table.setHorizontalHeaderLabels(["Kuyu", "İsim", "Tip", "Kopya", "Hacim", "Edge?"])  # ✅ Başlıklar
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         
@@ -87,7 +88,12 @@ class PlateEditorPanel(QWidget):
                 item = QTableWidgetItem("")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(r, c, item)
-                self.well_data[(r,c)] = {'name': '', 'type': 'TARGET', 'copies': 1000, 'vol_ul': 20.0}
+                is_edge = (r == 0 or r == rows-1 or c == 0 or c == cols-1)
+                self.well_data[(r,c)] = {
+                    'name': '', 'type': 'TARGET', 'copies': 1000, 'vol_ul': 20.0,
+                    'thermal_factor': 1.4 if is_edge else 1.0,
+                    'optical_factor': 0.97 if is_edge else 1.0
+                }
 
     def _on_cell_clicked(self, row: int, col: int):
         self.lbl_well.setText(f"{chr(65+row)}{col+1}")
@@ -106,26 +112,36 @@ class PlateEditorPanel(QWidget):
         w_type = self.cmb_type.currentText()
         w_copies = 0 if w_type == "NTC" else self.edt_copies.value()
         
+        rows, cols = self.table.rowCount(), self.table.columnCount()
+        is_edge = (r == 0 or r == rows-1 or c == 0 or c == cols-1)
+        
         self.well_data[(r,c)] = {
             'name': self.edt_name.text().strip() or f"W{r}{c}",
             'type': w_type,
             'copies': w_copies,
-            'vol_ul': self.edt_vol.value()
+            'vol_ul': self.edt_vol.value(),
+            'thermal_factor': 1.4 if is_edge else 1.0,
+            'optical_factor': 0.97 if is_edge else 1.0
         }
         sel[0].setText(f"{self.well_data[(r,c)]['name']}\n{w_copies} kopya")
         sel[0].setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # ✅ Edge? sütununu güncelle (5. indeks)
+        edge_item = QTableWidgetItem("✅" if is_edge else "❌")
+        edge_item.setToolTip(f"Thermal: {self.well_data[(r,c)]['thermal_factor']}x | Optical: {self.well_data[(r,c)]['optical_factor']}x")
+        self.table.setItem(r, 5, edge_item)
+        
         self.status_lbl.setText(f"✅ {self.lbl_well.text()} yapılandırıldı.")
 
     def _export_plate(self):
         wells = []
         for (r,c), d in self.well_data.items():
             if d['name']:
-                is_edge = (r == 0 or c == 0)
                 wells.append({
                     'row': r, 'col': c, 'name': d['name'], 'type': d['type'],
                     'copies': d['copies'], 'vol_ul': d['vol_ul'],
-                    'thermal_factor': 1.4 if is_edge else 1.0,
-                    'optical_factor': 0.97 if is_edge else 1.0
+                    'thermal_factor': d['thermal_factor'],
+                    'optical_factor': d['optical_factor']
                 })
         if not wells:
             QMessageBox.warning(self, "Uyarı", "En az bir kuyu yapılandırın.")

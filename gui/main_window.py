@@ -1,7 +1,7 @@
 # gui/main_window.py
 from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QTabWidget, QMessageBox, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QProgressBar, QLabel, QSizePolicy, QApplication
 from PyQt6.QtGui import QIcon, QPixmap, QFont
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 from gui.welcome_panel import WelcomePanel
 from gui.input_panel import InputPanel
 from gui.settings_panel import SettingsPanel
@@ -12,68 +12,31 @@ from gui.simulation_worker import SimulationWorker
 from gui.validation_worker import ValidationWorker
 from gui.optimizer_worker import OptimizerWorker
 from gui.multiplex_panel import MultiplexPanel
+from gui.specificity_panel_v2 import SpecificityPanelV2
+from gui.scenario_panel import ScenarioPanel
+from gui.roc_loq_panel import ROCLoQPanel
+from gui.lims_export_panel import LIMSPortPanel
+from gui.async_worker import TaskManager
+from core.config import AppConfig
+from core.project_state import ProjectState
+from analysis.report_generator import ReportGenerator
+from gui.error_logger import ErrorLogger
 import os, sys
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("qPCR Simulator v1.7 UI")
-        self.setMinimumSize(1050, 750)
-        self.resize(1200, 820)
+        self.setWindowTitle("qPCR Simulator v2.1 Digital Twin")
+        self.setMinimumSize(1100, 800); self.resize(1250, 850)
 
-        # 🎨 GLOBAL UI THEME
-        self.setStyleSheet("""
-            QMainWindow { background-color: #f8fafc; }
-            QLabel { font-family: "Segoe UI", "Inter", "Arial"; font-size: 13px; color: #334155; }
-            QLabel[heading="true"] { font-size: 15px; font-weight: 600; color: #0f172a; margin-bottom: 6px; }
-            
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
-                padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
-                background: #ffffff; font-size: 13px; min-height: 26px;
-            }
-            QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
-            QTextEdit { border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; }
-            
-            QPushButton {
-                padding: 8px 16px; border: none; border-radius: 6px;
-                background: #3b82f6; color: white; font-weight: 500; font-size: 13px;
-            }
-            QPushButton:hover { background: #2563eb; }
-            QPushButton:pressed { background: #1d4ed8; }
-            QPushButton:disabled { background: #94a3b8; color: #f1f5f9; }
-            QPushButton[success="true"] { background: #10b981; }
-            QPushButton[success="true"]:hover { background: #059669; }
-            QPushButton[warning="true"] { background: #f59e0b; }
-            QPushButton[warning="true"]:hover { background: #d97706; }
-
-            QGroupBox {
-                border: 1px solid #e2e8f0; border-radius: 8px; margin-top: 12px; padding-top: 10px;
-                font-weight: 600; color: #334155; background: #ffffff;
-            }
-            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #0f172a; }
-
-            QTabWidget::pane { border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff; margin-top: 6px; }
-            QTabBar::tab {
-                padding: 10px 22px; border: 1px solid #e2e8f0; border-bottom: none;
-                border-top-left-radius: 6px; border-top-right-radius: 6px;
-                background: #f1f5f9; color: #475569; font-size: 13px; margin-right: 5px; font-weight: 500;
-            }
-            QTabBar::tab:selected { background: #ffffff; color: #0f172a; border-color: #e2e8f0; font-weight: 600; }
-            QTabBar::tab:hover:!selected { background: #f8fafc; }
-
-            QTableWidget {
-                border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff;
-                gridline-color: #f1f5f9; font-size: 12px; alternate-background-color: #f8fafc;
-            }
-            QHeaderView::section {
-                background: #f1f5f9; padding: 9px; border: none; border-bottom: 2px solid #e2e8f0;
-                color: #334155; font-weight: 600; font-size: 12px;
-            }
-            QTableWidget::item:selected { background-color: #dbeafe; color: #0f172a; }
-            QTableWidget::item:hover { background-color: #f1f5f9; }
-
-            QWidget[canvas-container="true"] { background: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; }
-        """)
+        # ✅ QFont uyarısını tamamen engelle
+        os.environ["QT_QPA_FONTDIR"] = "" # Varsayılan font yolunu boşalt (sistem fontu kullanır)
+        
+        self.config = AppConfig()
+        self.state = ProjectState(self.config)
+        self.task_mgr = TaskManager(max_threads=4)
+        self.report_gen = ReportGenerator()
+        self.error_logger = ErrorLogger()
 
         icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "icon.png"))
         if os.path.exists(icon_path):
@@ -87,15 +50,11 @@ class MainWindow(QMainWindow):
 
         self.workspace = QWidget()
         ws_layout = QVBoxLayout(self.workspace)
-        ws_layout.setContentsMargins(12, 12, 12, 12)
-        ws_layout.setSpacing(10)
+        ws_layout.setContentsMargins(12, 12, 12, 12); ws_layout.setSpacing(10)
         top_bar = QHBoxLayout()
-        self.btn_home = QPushButton("🔄 Ana Ekran")
-        self.btn_home.setFixedWidth(110)
-        self.btn_home.setProperty("warning", True)
+        self.btn_home = QPushButton("🔄 Ana Ekran"); self.btn_home.setFixedWidth(110)
         self.btn_home.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-        top_bar.addWidget(self.btn_home)
-        top_bar.addStretch()
+        top_bar.addWidget(self.btn_home); top_bar.addStretch()
         ws_layout.addLayout(top_bar)
         self.tabs = QTabWidget()
         self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -108,189 +67,155 @@ class MainWindow(QMainWindow):
         self.mix_panel = MixBuilderPanel()
         self.results_panel = ResultsPanel()
         self.multiplex_panel = MultiplexPanel()
+        self.specificity_panel = SpecificityPanelV2()
+        self.scenario_panel = ScenarioPanel()
+        self.roc_panel = ROCLoQPanel()
+        self.lims_panel = LIMSPortPanel()
 
         self.tabs.addTab(self.input_panel, "🧬 Sekans & Primer")
         self.tabs.addTab(self.settings_panel, "⚙️ Reaksiyon & Döngü")
         self.tabs.addTab(self.plate_panel, "📊 Plaka & Kuyu")
         self.tabs.addTab(self.mix_panel, "⚗️ Master Mix")
         self.tabs.addTab(self.multiplex_panel, "🎨 Multiplex")
-        
-        results_container = QWidget()
-        res_layout = QVBoxLayout(results_container)
-        res_layout.setContentsMargins(0, 0, 0, 0)
-        res_layout.addWidget(self.results_panel)
-        btn_layout = QHBoxLayout()
-        self.validate_btn = QPushButton("📊 Validasyon Raporu")
-        self.validate_btn.setProperty("success", True)
-        self.validate_btn.clicked.connect(self._run_validation)
-        btn_layout.addWidget(self.validate_btn)
-        btn_layout.addStretch()
-        res_layout.addLayout(btn_layout)
-        self.tabs.addTab(results_container, "📈 Sonuçlar")
+        self.tabs.addTab(self.specificity_panel, "🔬 İzomorf & Spesifiklik")
+        self.tabs.addTab(self.scenario_panel, "🧪 Senaryo Modu")
+        self.tabs.addTab(self.roc_panel, "📈 ROC & LoQ")
+        self.tabs.addTab(self.lims_panel, "📤 LIMS Export")
+        self.tabs.addTab(self.results_panel, "📊 Sonuçlar & Rapor")
+
+        self.specificity_panel.primers_analyzed.connect(self._sync_primers_to_input)
 
         self.loading_overlay = QWidget(self)
-        self.loading_overlay.setProperty("loading-overlay", True)
-        self.loading_overlay.setStyleSheet("""
-            QWidget[loading-overlay="true"] { background: rgba(15, 23, 42, 0.88); border-radius: 12px; }
-        """)
+        self.loading_overlay.setStyleSheet("background: rgba(15, 23, 42, 0.88); border-radius: 12px;")
         self.loading_overlay.setVisible(False)
-        lo_layout = QVBoxLayout(self.loading_overlay)
-        self.loading_bar = QProgressBar()
-        self.loading_bar.setRange(0, 0)
-        self.loading_bar.setTextVisible(False)
-        self.loading_bar.setFixedHeight(6)
-        self.loading_bar.setStyleSheet("QProgressBar { border: none; border-radius: 3px; background: #334155; } QProgressBar::chunk { background: #3b82f6; border-radius: 3px; }")
-        self.loading_lbl = QLabel("⏳ Simülasyon çalışıyor... Lütfen bekleyin.")
-        self.loading_lbl.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 500;")
-        self.loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lo_layout.addStretch()
-        lo_layout.addWidget(self.loading_bar, 0, Qt.AlignmentFlag.AlignCenter)
-        lo_layout.addSpacing(8)
-        lo_layout.addWidget(self.loading_lbl, 0, Qt.AlignmentFlag.AlignCenter)
-        lo_layout.addStretch()
+        lo = QVBoxLayout(self.loading_overlay)
+        self.loading_bar = QProgressBar(); self.loading_bar.setRange(0,0); self.loading_bar.setTextVisible(False); self.loading_bar.setFixedHeight(6)
+        self.loading_bar.setStyleSheet("QProgressBar{border:none;border-radius:3px;background:#334155}QProgressBar::chunk{background:#3b82f6}")
+        self.loading_lbl = QLabel("⏳ İşlem çalışıyor..."); self.loading_lbl.setStyleSheet("color:#f8fafc;font-size:15px;font-weight:500"); self.loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lo.addStretch(); lo.addWidget(self.loading_bar, 0, Qt.AlignmentFlag.AlignCenter); lo.addWidget(self.loading_lbl, 0, Qt.AlignmentFlag.AlignCenter); lo.addStretch()
 
         self.welcome.start_requested.connect(self._setup_workspace)
         self.input_panel.run_requested.connect(self._start_simulation)
         self.mix_panel.mix_ready.connect(self._apply_mix_params)
         self.plate_panel.plate_ready.connect(self._apply_plate_params)
-        self.settings_panel.optimize_requested.connect(self._run_optimizer)
+        self.settings_panel.optimize_requested.connect(self._run_optimizer_async)
         self.multiplex_panel.multiplex_config_ready.connect(self._apply_multiplex_config)
+        self.scenario_panel.scenario_ready.connect(self._load_scenario)
 
         self.sim_worker = None
         self.val_worker = None
         self.opt_worker = None
-        self._mix_override = None
-        self._plate_wells = None
-        self._multiplex_override = None
-        self.current_user = "Anonim"
+        self._mix_override = None; self._plate_wells = None; self._multiplex_override = None
+        self.current_user = "Anonim"; self.current_session_id = None; self._scenario_data = None
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.loading_overlay.setGeometry(0, 0, self.width(), self.height())
+    def closeEvent(self, event):
+        """✅ Zorunlu Thread Temizliği"""
+        # Task pool'u durdur
+        try: self.task_mgr.pool.clear()
+        except: pass
+        
+        # Worker'ları zorla durdur
+        workers = [self.sim_worker, self.val_worker, self.opt_worker]
+        for w in workers:
+            if w and w.isRunning():
+                w.terminate() # Hemen öldür
+                w.wait()      # Bitmesini bekle
+        event.accept()
 
-    def _setup_workspace(self, config: dict):
-        self.current_user = config.get("user", "Anonim")
-        exp = config.get("exp_type", "single")
-        for i in range(self.tabs.count()):
-            self.tabs.setTabVisible(i, False)
-        if exp == "single":
-            for i in [0,1,3,4,5]: self.tabs.setTabVisible(i, True)
-            self.tabs.setCurrentIndex(0)
-            self.input_panel.set_template_enabled(True)
-        elif exp == "plate":
-            for i in [0,1,2,3,4,5]: self.tabs.setTabVisible(i, True)
-            self.tabs.setCurrentIndex(2)
-            self.input_panel.set_template_enabled(False)
-        elif exp == "validation":
-            for i in [1,3,4,5]: self.tabs.setTabVisible(i, True)
-            self.tabs.setCurrentIndex(4)
-        elif exp == "diagnostics":
-            QMessageBox.information(self, "Bilgi", "Diagnostik/LoD modülü aktif.")
-            self._setup_workspace({"user": self.current_user, "exp_type": "plate"})
-            return
-        self.setWindowTitle(f"qPCR Simulator v1.7 | {self.current_user} | {exp.upper()}")
+    def resizeEvent(self, e): super().resizeEvent(e); self.loading_overlay.setGeometry(0,0,self.width(),self.height())
+
+    def _setup_workspace(self, cfg: dict):
+        self.current_user = cfg.get("user", "Anonim")
+        for i in range(self.tabs.count()): self.tabs.setTabVisible(i, True)
+        self.tabs.setCurrentIndex(8)
+        self.setWindowTitle(f"qPCR Simulator v2.1 | {self.current_user}")
         self.stack.setCurrentIndex(1)
+        self.current_session_id = f"{self.current_user}_run"
 
-    def _apply_mix_params(self, m: dict):
-        self._mix_override = m
-        QMessageBox.information(self, "Mix Uygulandı", f"Mg²⁺: {m['mg_final']} mM | dNTP: {m['dntp_final']} mM | Primer: {m['primer_final']} µM")
+    def _sync_primers_to_input(self, fwd: str, rev: str):
+        self.input_panel.fwd_input.setPlainText(fwd)
+        self.input_panel.rev_input.setPlainText(rev)
+        self.tabs.setCurrentIndex(0)
 
-    def _apply_plate_params(self, wells: list):
-        self._plate_wells = wells
-        self.tabs.setCurrentIndex(5)
-        QMessageBox.information(self, "Plaka Aktarıldı", f"{len(wells)} kuyu yapılandırması kaydedildi.")
-
-    def _apply_multiplex_config(self, config: dict):
-        self._multiplex_override = config
-        QMessageBox.information(self, "Multiplex Ayarlandı", f"Ch1: {config['ch1_dye']} | Ch2: {config['ch2_dye']} | Ch3: {config['ch3_dye']}")
+    def _apply_mix_params(self, m: dict): self._mix_override = m
+    def _apply_plate_params(self, w: list): self._plate_wells = w
+    def _apply_multiplex_config(self, c: dict): self._multiplex_override = c
+    def _load_scenario(self, c: dict): self._scenario_data = c
 
     def _start_simulation(self):
-        if self.sim_worker and self.sim_worker.isRunning():
-            QMessageBox.warning(self, "Uyarı", "Simülasyon zaten çalışıyor.")
-            return
-        params = {**self.input_panel.get_params(), **self.settings_panel.get_params(), 'primer_conc': 250e-9, 'user': self.current_user}
+        if self.sim_worker and self.sim_worker.isRunning(): return QMessageBox.warning(self, "Uyarı", "Çalışıyor.")
+        fwd = self.input_panel.fwd_input.toPlainText().strip()
+        rev = self.input_panel.rev_input.toPlainText().strip()
+        if not fwd or not rev:
+            spec_fwd = self.specificity_panel.fwd_input.text().strip()
+            spec_rev = self.specificity_panel.rev_input.text().strip()
+            if spec_fwd and spec_rev:
+                self._sync_primers_to_input(spec_fwd, spec_rev)
+                fwd, rev = spec_fwd, spec_rev
+            else:
+                return QMessageBox.critical(self, "Hata", "Forward ve Reverse primer sekansları boş bırakılamaz.")
+        
+        params = {**self.input_panel.get_params(), **self.settings_panel.get_params(), 'primer_conc': 250e-9, 'user': self.current_user, 'fwd_primer': fwd, 'rev_primer': rev}
         if self._mix_override:
             m = self._mix_override
             params.update({'mg_conc': m['mg_final'], 'dntp_conc': m['dntp_final'], 'primer_conc': m['primer_final']*1e-6, 'pipette_cv': m['pipette_cv']})
         if self._plate_wells: params['plate_wells'] = self._plate_wells
         if self._multiplex_override: params['multiplex'] = self._multiplex_override
+        if self._scenario_data: params['scenario'] = self._scenario_data
             
         self.loading_overlay.setVisible(True)
         self.sim_worker = SimulationWorker(params)
         self.sim_worker.finished.connect(self._on_sim_finished)
         self.sim_worker.error.connect(self._on_sim_error)
         self.sim_worker.progress.connect(self.results_panel.update_progress)
-        self.input_panel.set_running_state(True)
-        self.results_panel.clear()
-        self.sim_worker.start()
+        self.input_panel.set_running_state(True); self.results_panel.clear(); self.sim_worker.start()
 
     def _on_sim_finished(self, result: dict):
-        self.loading_overlay.setVisible(False)
-        self.input_panel.set_running_state(False)
+        self.loading_overlay.setVisible(False); self.input_panel.set_running_state(False)
         self.results_panel.plot_curve(result['cycles'], result['signal'], label=result.get('dye', 'Target'))
         self.results_panel.update_results(result, self.sim_worker.params)
-        self.tabs.setCurrentIndex(5)
+        self.tabs.setCurrentIndex(8)
+        
+        if self.current_session_id:
+            save_path = self.state.create_session(self.current_session_id)
+            self.state.save(save_path, {'parameters': self.sim_worker.params, 'results': result})
+            cts = result.get('plate_cts', [result.get('ct', 0)])
+            labels = [1 if c < 38 else 0 for c in cts]
+            eff = result.get('efficiency', 0.8)
+            if hasattr(self.roc_panel, 'update_data'): self.roc_panel.update_data(cts, labels, eff)
+            if hasattr(self.lims_panel, 'update_data'): self.lims_panel.update_data({'user': self.current_user, 'parameters': self.sim_worker.params, 'results': result})
+            if hasattr(self.scenario_panel, 'update_data'): self.scenario_panel.update_data(eff, cts)
+            class ReportWorker(QThread):
+                finished = pyqtSignal(str)
+                def run(self):
+                    html = self.report_gen.generate_html(self.session_id, self.params, {'Verimlilik': f"{self.eff*100:.1f}%", 'Ct': f"{self.ct:.2f}"})
+                    self.report_gen.generate_pdf(html)
+                    self.finished.emit(html)
+                def __init__(self, gen, sid, params, eff, ct):
+                    super().__init__(); self.report_gen = gen; self.session_id = sid; self.params = params; self.eff = eff; self.ct = ct
+            rpt = ReportWorker(self.report_gen, self.current_session_id, self.sim_worker.params, eff, result.get('ct',0))
+            rpt.finished.connect(lambda p: self.results_panel.update_status(f"✅ Rapor hazır: {os.path.basename(p)}"))
+            rpt.start()
 
-    def _on_sim_error(self, msg: str):
+    def _on_sim_error(self, msg: str): 
+        self.loading_overlay.setVisible(False); self.input_panel.set_running_state(False)
+        self.error_logger.log(Exception(msg), "Simulation Error")
+        QMessageBox.critical(self, "Hata", f"{msg}\n\n📁 Detaylı log: {self.error_logger.get_latest_log()}")
+
+    def _run_optimizer_async(self, tm_avg: float, copies: float, **kwargs):
+        self.loading_overlay.setVisible(True); self.loading_lbl.setText("⏳ Grid Tarama...")
+        def run_opt(**kw):
+            w = OptimizerWorker(tm_avg, copies); res=[]; w.finished.connect(lambda r: res.extend(r)); w.start(); w.wait(); return res
+        sig = self.task_mgr.start(run_opt); sig.finished.connect(self._on_opt_finished_async); sig.error.connect(self._on_opt_error_async)
+
+    def _on_opt_finished_async(self, results: list):
         self.loading_overlay.setVisible(False)
-        self.input_panel.set_running_state(False)
-        QMessageBox.critical(self, "Hata", msg)
-
-    def _run_validation(self):
-        if self.val_worker and self.val_worker.isRunning(): return
-        s = self.settings_panel.get_params()
-        m = self._mix_override
-        base = {'mg': m['mg_final'] if m else s.get('mg_conc',3.0), 'dntp': m['dntp_final'] if m else s.get('dntp_conc',0.2),
-                'ta': s.get('ta_temp',60.0), 'tm': 58.0, 'cycles': s.get('cycles',40),
-                'primer_uM': (m['primer_final'] if m else s.get('primer_conc_uM',0.25))*1000,
-                'polymerase_U': 1.0, 'dye': s.get('dye_type','SYBR'), 'copies': 1000.0, 'time_factor': 1.0, 'user': self.current_user}
-        self.val_worker = ValidationWorker(base)
-        self.val_worker.progress.connect(self.results_panel.update_status)
-        self.val_worker.finished.connect(self._on_val_finished)
-        self.val_worker.error.connect(self._on_val_error)
-        self.validate_btn.setEnabled(False)
-        self.validate_btn.setText("⏳ Rapor Oluşturuluyor...")
-        self.val_worker.start()
-
-    def _on_val_finished(self, pdf_path: str):
-        self.validate_btn.setEnabled(True)
-        self.validate_btn.setText("📊 Validasyon Raporu")
-        self.results_panel.update_status(f"✅ Rapor hazır: {os.path.basename(pdf_path)}")
-        QMessageBox.information(self, "Validasyon Tamamlandı", f"PDF oluşturuldu:\n{pdf_path}")
-
-    def _on_val_error(self, msg: str):
-        self.validate_btn.setEnabled(True)
-        self.validate_btn.setText("📊 Validasyon Raporu")
-        QMessageBox.critical(self, "Validasyon Hatası", msg)
-
-    def _run_optimizer(self, tm_avg: float, copies: float):
-        if self.opt_worker and self.opt_worker.isRunning():
-            QMessageBox.warning(self, "Uyarı", "Optimizasyon zaten çalışıyor.")
+        if not results: 
+            self.settings_panel.optimize_lbl.setText("⚠️ MIQE aralığında kombinasyon bulunamadı.")
             return
-        self.settings_panel.optimize_btn.setEnabled(False)
-        self.settings_panel.optimize_btn.setText("⏳ Taranıyor...")
-        self.settings_panel.optimize_lbl.setText("⏳ Mg²⁺/Ta/Primer grid taraması başladı. ~5-10 sn sürebilir.")
-        self.opt_worker = OptimizerWorker(tm_avg, copies)
-        self.opt_worker.progress.connect(self.settings_panel.optimize_lbl.setText)
-        self.opt_worker.finished.connect(self._on_opt_finished)
-        self.opt_worker.error.connect(self._on_opt_error)
-        self.opt_worker.start()
-
-    def _on_opt_finished(self, results: list):
-        self.settings_panel.optimize_btn.setEnabled(True)
-        self.settings_panel.optimize_btn.setText("🚀 Optimize Et")
-        if not results:
-            self.settings_panel.optimize_lbl.setText("⚠️ Uygun kombinasyon bulunamadı.")
-            return
-        txt = "✅ MIQE Optimizasyon Önerileri (Top 3):\n"
-        for i, r in enumerate(results):
-            txt += f"{i+1}. Mg: {r['mg']:.2f} mM | Ta: {r['ta']:.1f}°C | Primer: {r['primer_uM']:.2f} µM → E: {r['efficiency']*100:.1f}% | Ct: {r['ct']:.1f}\n"
-        txt += "\n💡 Laboratuvar önerisi: Önce 1. kombinasyonu test edin. NTC ve melt curve ile doğrulayın."
-        self.settings_panel.optimize_lbl.setText(txt)
-        QMessageBox.information(self, "Optimizasyon Tamamlandı", txt)
-
-    def _on_opt_error(self, msg: str):
-        self.settings_panel.optimize_btn.setEnabled(True)
-        self.settings_panel.optimize_btn.setText("🚀 Optimize Et")
-        self.settings_panel.optimize_lbl.setText(f"⚠️ Hata: {msg}")
-        QMessageBox.critical(self, "Optimizasyon Hatası", msg)
+        txt = "✅ MIQE Top 3:\n" + "".join(f"{i+1}. Mg:{r['mg']:.2f}mM Ta:{r['ta']:.1f}°C P:{r['primer_uM']:.2f}µM → E:{r['efficiency']*100:.1f}%\n" for i,r in enumerate(results))
+        self.settings_panel.optimize_lbl.setText(txt); QMessageBox.information(self, "Optimizasyon Tamamlandı", txt)
+    def _on_opt_error_async(self, msg: str): 
+        self.loading_overlay.setVisible(False)
+        self.error_logger.log(Exception(msg), "Optimizer Error")
+        self.settings_panel.optimize_lbl.setText(f"⚠️ {msg}")
